@@ -17,6 +17,10 @@ bool inreflow = false;
 bool relaypwr = false;
 bool ventpwr = false;
 
+String bake_p = "";
+
+bool tarmode = false;
+
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -69,7 +73,8 @@ int T_const=2; // From testing, overshoot was about 5-6*C
 // Standard lead-free solder paste (melting point around 215*C)
 int T_preheat=150;
 int T_soak=217;
-int T_reflow=249 - T_const;
+int T_reflow_s = 249;
+int T_reflow=T_reflow_s - T_const;
 
 // "Low-temp" lead-free solder paste (melting point around 138*C)
 //#define T_preheat 90
@@ -108,7 +113,12 @@ int T_reflow=249 - T_const;
 #define stopChar "!" // App is receiving command to stop reflow process (process finished!)
 #define startReflow "A" // Command from app to "activate" reflow process
 #define stopReflow "S" // Command from app to "stop" reflow process at any time
-#define configReflow "C" // Command from app to reconfigure reflow
+#define configReflow "C" // Command from app to reconfigure reflow,and indicate T-Const
+#define config_preheat "P" //indicate T-Preheat
+#define config_soak "K" //indicate T-Soak
+#define config_reflow "R" //indicate T-Reflow
+#define startTarget "V" //Command from app to strat target mode
+#define stopTarget "G" //Command from app to stop target mode
 
 double temperature, chiptemperature, output, setPoint; // Input, output, set point
 PID myPID(&temperature, &output, &setPoint, Kp_preheat, Ki_preheat, Kd_preheat, DIRECT);
@@ -166,7 +176,19 @@ class MyCallbacks: public BLECharacteristicCallbacks {
       }
       else if (rxValue.find(configReflow) != -1) { // Command to stop reflow process
         //configure
-        
+        T_const = stoi(rxValue.substr(rxValue.find("C")+1,(rxValue.find("P")-rxValue.find("C"))-1));
+        T_preheat = stoi(rxValue.substr(rxValue.find("P")+1,(rxValue.find("K")-rxValue.find("P"))-1));
+        T_soak = stoi(rxValue.substr(rxValue.find("K")+1,(rxValue.find("R")-rxValue.find("K"))-1));
+        T_reflow_s = stoi(rxValue.substr(rxValue.find("R")+1,(rxValue.length()-rxValue.find("R"))-1));
+        T_reflow=T_reflow_s - T_const;
+        Serial.print("<-- Config Received const:");
+        Serial.print(T_const);
+        Serial.print(" preheat: ");
+        Serial.print(T_preheat);
+        Serial.print(" soak: ");
+        Serial.print(T_soak);
+        Serial.print(" reflow: ");
+        Serial.println(T_reflow);
       }
       // Add you own functions here and have fun with it!
     }
@@ -250,17 +272,15 @@ void update_disp(){
   display.clearDisplay();
 
   String oven_sta = "";
-  //Status
-  if(inreflow){
-    oven_sta="Reflow";
-  }
-  else{
-    oven_sta="IDLE";
-  }
   display.setTextSize(2);
   display.setCursor(10,3);
   display.setTextColor(WHITE);
-  display.println((String)(oven_sta));
+  if(!inreflow){
+    display.println("IDLE");
+  }
+  else{
+    display.println(bake_p);
+  }
   display.drawRect(0, 0, 128, 20, WHITE);
   //Temperture + Relay + Fan
   if(relaypwr){
@@ -299,6 +319,8 @@ void update_disp(){
 }
 
 void loop() { 
+  /***********************************TARGET TEMP MODE****************************/
+
   /***************************** REFLOW PROCESS CODE *****************************/
   if (reflow) {
     digitalWrite(LED, HIGH); // Blue LED indicates reflow is underway
@@ -339,6 +361,7 @@ void loop() {
         t_final = (T_preheat - T_start) / (preheat_rate / 1000.0) + t_start;
         // Calculate desired temperature at that instant in time using linear interpolation
         setPoint = duration * (T_preheat - T_start) / (t_final - t_start);
+        bake_p="A:PREHEAT";
       }
     }
     /********************* SOAK *********************/
@@ -351,6 +374,7 @@ void loop() {
       else {
         t_final = (T_soak - T_start) / (soak_rate / 1000.0) + t_start;
         setPoint = duration * (T_soak - T_start) / (t_final - t_start);
+        bake_p="A:SOAK";
       }
     }
     /********************* REFLOW *********************/
@@ -363,6 +387,7 @@ void loop() {
       else {
         t_final = (T_reflow - T_start) / (reflow_rate / 1000.0) + t_start;
         setPoint = duration * (T_reflow - T_start) / (t_final - t_start);
+        bake_p="A:REFLOW";
       }
     }
     /********************* COOLDOWN *********************/
@@ -402,6 +427,7 @@ void loop() {
     }
   }
   else {
+    //REFLOW STOP
     digitalWrite(LED, LOW);
     digitalWrite(relay, LOW);
     relaypwr = false;
