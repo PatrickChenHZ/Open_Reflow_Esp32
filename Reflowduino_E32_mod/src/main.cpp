@@ -16,6 +16,7 @@ float txValue = 0;
 bool inreflow = false;
 bool relaypwr = false;
 bool ventpwr = false;
+bool vent_interlock = false;
 
 String bake_p = "";
 
@@ -41,7 +42,7 @@ SPIClass SPI2(HSPI); // We are using HSPI pins on the ESP32
 
 // Define pins
 #define relay 15
-#define vent_fan 27
+#define vent_fan 26
 
 #define oled_scl 22
 #define oled_sda 21
@@ -52,8 +53,6 @@ SPIClass SPI2(HSPI); // We are using HSPI pins on the ESP32
 #define MAX_DO 12 // MAX31855 data pin (HSPI MISO on ESP32)
 #define MAX_DI 13 // MAX31856 data pin (HSPI MOSI on ESP32)
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 // Initialize Bluetooth software serial
 
 // Initialize thermocouple
@@ -75,6 +74,8 @@ int T_preheat=150;
 int T_soak=217;
 int T_reflow_s = 249;
 int T_reflow=T_reflow_s - T_const;
+
+int T_vent_start = 125;
 
 // "Low-temp" lead-free solder paste (melting point around 138*C)
 //#define T_preheat 90
@@ -174,12 +175,18 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         relaypwr = false;
         Serial.println("<-- ***Reflow process aborted!");
       }
+      else if (rxValue.find(startTarget) != -1){
+        //WIP
+      }
+      else if (rxValue.find(stopTarget) != -1){
+        //WIP
+      }
       else if (rxValue.find(configReflow) != -1) { // Command to stop reflow process
         //configure
         T_const = stoi(rxValue.substr(rxValue.find("C")+1,(rxValue.find("P")-rxValue.find("C"))-1));
         T_preheat = stoi(rxValue.substr(rxValue.find("P")+1,(rxValue.find("K")-rxValue.find("P"))-1));
         T_soak = stoi(rxValue.substr(rxValue.find("K")+1,(rxValue.find("R")-rxValue.find("K"))-1));
-        T_reflow_s = stoi(rxValue.substr(rxValue.find("R")+1,(rxValue.length()-rxValue.find("R"))-1));
+        T_reflow_s = stoi(rxValue.substr(rxValue.find("R")+1,(rxValue.length()-rxValue.find("R"))-2));
         T_reflow=T_reflow_s - T_const;
         Serial.print("<-- Config Received const:");
         Serial.print(T_const);
@@ -224,11 +231,14 @@ void setup() {
 
   pinMode(LED, OUTPUT);
   pinMode(relay, OUTPUT);
+  pinMode(vent_fan, OUTPUT);
 
   digitalWrite(LED, LOW);
   inreflow = false;
   digitalWrite(relay, LOW); // Set default relay state to OFF
   relaypwr = false;
+  digitalWrite(vent_fan, LOW);
+  ventpwr = false;
 
   myPID.SetOutputLimits(0, windowSize);
   myPID.SetSampleTime(PID_sampleTime);
@@ -320,7 +330,12 @@ void update_disp(){
 
 void loop() { 
   /***********************************TARGET TEMP MODE****************************/
-
+  if (tarmode){
+    //WIP
+  }
+  else{
+    //WIP
+  }
   /***************************** REFLOW PROCESS CODE *****************************/
   if (reflow) {
     digitalWrite(LED, HIGH); // Blue LED indicates reflow is underway
@@ -396,6 +411,7 @@ void loop() {
         coolComplete = true;
         reflow = false;
         Serial.println("PCB reflow complete!");
+        vent_interlock = false;
         
         // Tell the app that the entire process is finished!
         pCharacteristic->setValue(stopChar);
@@ -404,6 +420,23 @@ void loop() {
       else {
         t_final = (T_cool - T_start) / (cool_rate / 1000.0) + t_start;
         setPoint = duration * (T_cool - T_start) / (t_final - t_start);
+        bake_p="A:COOL";
+      }
+    }
+    //activate cooling fan
+    //deactivate when temp is below 8+cooling target
+    if(bake_p == "A:COOL" && !coolComplete && !vent_interlock){
+      if(temperature <= T_vent_start){
+        if(temperature >= T_cool + 8){
+          digitalWrite(vent_fan, HIGH);
+          ventpwr = true;
+        }
+        else{
+          digitalWrite(vent_fan, LOW);
+          ventpwr = false;
+          //prevent repeated relay action
+          vent_interlock = true;
+        }
       }
     }
 
