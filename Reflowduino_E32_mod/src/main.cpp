@@ -122,7 +122,12 @@ int T_vent_start = 125;
 #define stopTarget "G" //Command from app to stop target mode
 
 double temperature, chiptemperature, output, setPoint; // Input, output, set point
+double T_hold = 0;
+double tarsetPoint = 0;
+double taroutput;
+
 PID myPID(&temperature, &output, &setPoint, Kp_preheat, Ki_preheat, Kd_preheat, DIRECT);
+PID targetPID(&temperature, &taroutput, &tarsetPoint, 300, 0.1, 350, DIRECT);
 
 // Logic flags
 bool justStarted = true;
@@ -134,10 +139,13 @@ bool coolComplete = false;
 
 double T_start; // Starting temperature before reflow process
 int windowSize = 2000;
+int tarwindowSize = 6000;
 unsigned long sendRate = 2000; // Send data to app every 2s
 unsigned long t_start = 0; // For keeping time during reflow process
 unsigned long previousMillis = 0;
 unsigned long duration, t_final, windowStartTime, timer;
+
+unsigned long tarwindowStartTime;
 
 class MyServerCallbacks: public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
@@ -176,10 +184,19 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         Serial.println("<-- ***Reflow process aborted!");
       }
       else if (rxValue.find(startTarget) != -1){
-        //WIP
+        //find T_hold value
+        T_hold = stoi(rxValue.substr(rxValue.find("V")+1,(rxValue.length()-rxValue.find("V"))-2));
+        //start loop
+        tarwindowStartTime = millis();//equal to restart/start a pid loop
+        tarsetPoint = T_hold;
+        tarmode = true;
       }
       else if (rxValue.find(stopTarget) != -1){
         //WIP
+        digitalWrite(relay, LOW); // Turn off appliance and set flag to stop PID control
+        tarmode = false;
+        relaypwr = false;
+        Serial.println("<-- ***Reflow process aborted!");
       }
       else if (rxValue.find(configReflow) != -1) { // Command to stop reflow process
         //configure
@@ -244,6 +261,11 @@ void setup() {
   myPID.SetSampleTime(PID_sampleTime);
   myPID.SetMode(AUTOMATIC); // Turn on PID control
 
+  //Target mode setup
+  targetPID.SetOutputLimits(0,tarwindowSize);
+  targetPID.SetSampleTime(PID_sampleTime);
+  targetPID.SetMode(AUTOMATIC);
+
   /***************************** BLUETOOTH SETUP *****************************/
   // Create the BLE Device
   BLEDevice::init("Reflowduino32"); // Give it a name
@@ -285,7 +307,7 @@ void update_disp(){
   display.setTextSize(2);
   display.setCursor(10,3);
   display.setTextColor(WHITE);
-  if(!inreflow){
+  if(!inreflow && !tarmode){
     display.println("IDLE");
   }
   else{
@@ -331,10 +353,32 @@ void update_disp(){
 void loop() { 
   /***********************************TARGET TEMP MODE****************************/
   if (tarmode){
-    //WIP
+    //From https://playground.arduino.cc/Code/PIDLibraryRelayOutputExample/
+    digitalWrite(LED, HIGH);
+    targetPID.Compute();
+    unsigned long tarnow = millis();
+    if (tarnow - tarwindowStartTime > tarwindowSize)
+    { //time to shift the Relay Window
+      tarwindowStartTime += tarwindowSize;
+    }
+    if (taroutput > tarnow - tarwindowStartTime){
+      digitalWrite(relay, HIGH);
+      relaypwr = true;
+    }
+    else{
+      digitalWrite(relay, LOW);
+      relaypwr = false;
+    }
+    //limit to whole umber
+    bake_p="HOLD-" + (String)((int)tarsetPoint);
   }
-  else{
-    //WIP
+  else if(!reflow){
+    //STOP
+    digitalWrite(LED, LOW);
+    digitalWrite(relay, LOW);
+    relaypwr = false;
+    inreflow = false;
+    //Serial.println("RL OFF");
   }
   /***************************** REFLOW PROCESS CODE *****************************/
   if (reflow) {
@@ -459,7 +503,7 @@ void loop() {
       //Serial.println("RL OFF");
     }
   }
-  else {
+  else if(!tarmode) {
     //REFLOW STOP
     digitalWrite(LED, LOW);
     digitalWrite(relay, LOW);
